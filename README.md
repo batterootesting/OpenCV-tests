@@ -9,3 +9,9 @@ On Linux, install the required OpenCV libraries like this:
 ```
 sudo apt-get install libopencv-dev python-opencv
 ```
+
+Also requires matplotlib
+
+```
+sudo apt-get install python-matplotlib python-mpltoolkits.basemap
+```
